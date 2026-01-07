@@ -5,8 +5,6 @@ if( !defined( 'DVWA_WEB_PAGE_TO_ROOT' ) ) {
 	exit;
 }
 
-session_start(); // Creates a 'Full Path Disclosure' vuln.
-
 if (!file_exists(DVWA_WEB_PAGE_TO_ROOT . 'config/config.inc.php')) {
 	die ("DVWA System error - config file not found. Copy config/config.inc.php.dist to config/config.inc.php and configure to your environment.");
 }
@@ -26,8 +24,7 @@ if( !isset( $_COOKIE[ 'security' ] ) || !in_array( $_COOKIE[ 'security' ], $secu
 	// Set security cookie to impossible if no cookie exists
 	if( in_array( $_DVWA[ 'default_security_level' ], $security_levels) ) {
 		dvwaSecurityLevelSet( $_DVWA[ 'default_security_level' ] );
-	}
-	else {
+	} else {
 		dvwaSecurityLevelSet( 'impossible' );
 	}
 
@@ -36,6 +33,37 @@ if( !isset( $_COOKIE[ 'security' ] ) || !in_array( $_COOKIE[ 'security' ], $secu
 	else
 		dvwaPhpIdsEnabledSet( false );
 }
+
+// This will setup the session cookie based on
+// the security level.
+
+if (dvwaSecurityLevelGet() == 'impossible') {
+	$httponly = true;
+	$samesite = true;
+}
+else {
+	$httponly = false;
+	$samesite = false;
+}
+
+$maxlifetime = 86400;
+$secure = false;
+
+session_set_cookie_params([
+	'lifetime' => $maxlifetime,
+	'path' => '/',
+	'domain' => $_SERVER['HTTP_HOST'],
+	'secure' => $secure,
+	'httponly' => $httponly,
+	'samesite' => $samesite
+]);
+session_start();
+
+if (!array_key_exists ("default_locale", $_DVWA)) {
+	$_DVWA[ 'default_locale' ] = "en";
+}
+
+dvwaLocaleSet( $_DVWA[ 'default_locale' ] );
 
 // DVWA version
 function dvwaVersionGet() {
@@ -59,7 +87,7 @@ function &dvwaSessionGrab() {
 
 
 function dvwaPageStartup( $pActions ) {
-	if( in_array( 'authenticated', $pActions ) ) {
+	if (in_array('authenticated', $pActions)) {
 		if( !dvwaIsLoggedIn()) {
 			dvwaRedirect( DVWA_WEB_PAGE_TO_ROOT . 'login.php' );
 		}
@@ -97,6 +125,11 @@ function dvwaLogin( $pUsername ) {
 
 
 function dvwaIsLoggedIn() {
+	global $_DVWA;
+
+	if (in_array("disable_authentication", $_DVWA) && $_DVWA['disable_authentication']) {
+		return true;
+	}
 	$dvwaSession =& dvwaSessionGrab();
 	return isset( $dvwaSession[ 'username' ] );
 }
@@ -114,7 +147,7 @@ function dvwaPageReload() {
 
 function dvwaCurrentUser() {
 	$dvwaSession =& dvwaSessionGrab();
-	return ( isset( $dvwaSession[ 'username' ]) ? $dvwaSession[ 'username' ] : '') ;
+	return ( isset( $dvwaSession[ 'username' ]) ? $dvwaSession[ 'username' ] : 'Unknown') ;
 }
 
 // -- END (Session functions)
@@ -133,7 +166,21 @@ function &dvwaPageNewGrab() {
 
 
 function dvwaSecurityLevelGet() {
-	return isset( $_COOKIE[ 'security' ] ) ? $_COOKIE[ 'security' ] : 'impossible';
+	global $_DVWA;
+
+	// If there is a security cookie, that takes priority.
+	if (isset($_COOKIE['security'])) {
+		return $_COOKIE[ 'security' ];
+	}
+
+	// If not, check to see if authentication is disabled, if it is, use
+	// the default security level.
+	if (in_array("disable_authentication", $_DVWA) && $_DVWA['disable_authentication']) {
+		return $_DVWA[ 'default_security_level' ];
+	}
+
+	// Worse case, set the level to impossible.
+	return 'impossible';
 }
 
 
@@ -144,10 +191,29 @@ function dvwaSecurityLevelSet( $pSecurityLevel ) {
 	else {
 		$httponly = false;
 	}
-	setcookie( session_name(), session_id(), null, '/', null, null, $httponly );
-	setcookie( 'security', $pSecurityLevel, NULL, NULL, NULL, NULL, $httponly );
+
+	setcookie( 'security', $pSecurityLevel, 0, "/", "", false, $httponly );
 }
 
+function dvwaLocaleGet() {	
+	$dvwaSession =& dvwaSessionGrab();
+	return $dvwaSession[ 'locale' ];
+}
+
+function dvwaSQLiDBGet() {
+	global $_DVWA;
+	return $_DVWA['SQLI_DB'];
+}
+
+function dvwaLocaleSet( $pLocale ) {
+	$dvwaSession =& dvwaSessionGrab();
+	$locales = array('en', 'zh');
+	if( in_array( $pLocale, $locales) ) {
+		$dvwaSession[ 'locale' ] = $pLocale;
+	} else {
+		$dvwaSession[ 'locale' ] = 'en';
+	}
+}
 
 // Start message functions --
 
@@ -210,6 +276,9 @@ function dvwaHtmlEcho( $pPage ) {
 		$menuBlocks[ 'vulnerabilities' ][] = array( 'id' => 'xss_s', 'name' => 'XSS (Stored)', 'url' => 'vulnerabilities/xss_s/' );
 		$menuBlocks[ 'vulnerabilities' ][] = array( 'id' => 'csp', 'name' => 'CSP Bypass', 'url' => 'vulnerabilities/csp/' );
 		$menuBlocks[ 'vulnerabilities' ][] = array( 'id' => 'javascript', 'name' => 'JavaScript', 'url' => 'vulnerabilities/javascript/' );
+		if (dvwaCurrentUser() == "admin") {
+			$menuBlocks[ 'vulnerabilities' ][] = array( 'id' => 'authbypass', 'name' => 'Authorisation Bypass', 'url' => 'vulnerabilities/authbypass/' );
+		}
 	}
 
 	$menuBlocks[ 'meta' ] = array();
@@ -256,6 +325,10 @@ function dvwaHtmlEcho( $pPage ) {
 
 	$phpIdsHtml   = '<em>PHPIDS:</em> ' . ( dvwaPhpIdsIsEnabled() ? 'enabled' : 'disabled' );
 	$userInfoHtml = '<em>Username:</em> ' . ( dvwaCurrentUser() );
+	$securityLevelHtml = "<em>Security Level:</em> {$securityLevelHtml}";
+	$localeHtml = '<em>Locale:</em> ' . ( dvwaLocaleGet() );
+	$sqliDbHtml = '<em>SQLi DB:</em> ' . ( dvwaSQLiDBGet() );
+	
 
 	$messagesHtml = messagesPopAllToHtml();
 	if( $messagesHtml ) {
@@ -263,8 +336,8 @@ function dvwaHtmlEcho( $pPage ) {
 	}
 
 	$systemInfoHtml = "";
-	if( dvwaIsLoggedIn() )
-		$systemInfoHtml = "<div align=\"left\">{$userInfoHtml}<br /><em>Security Level:</em> {$securityLevelHtml}<br />{$phpIdsHtml}</div>";
+	if( dvwaIsLoggedIn() ) 
+		$systemInfoHtml = "<div align=\"left\">{$userInfoHtml}<br />{$securityLevelHtml}<br />{$localeHtml}<br />{$phpIdsHtml}<br />{$sqliDbHtml}</div>";
 	if( $pPage[ 'source_button' ] ) {
 		$systemInfoHtml = dvwaButtonSourceHtmlGet( $pPage[ 'source_button' ] ) . " $systemInfoHtml";
 	}
@@ -277,10 +350,9 @@ function dvwaHtmlEcho( $pPage ) {
 	Header( 'Content-Type: text/html;charset=utf-8' );     // TODO- proper XHTML headers...
 	Header( 'Expires: Tue, 23 Jun 2009 12:00:00 GMT' );    // Date in the past
 
-	echo "
-<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">
+	echo "<!DOCTYPE html>
 
-<html xmlns=\"http://www.w3.org/1999/xhtml\">
+<html lang=\"en-GB\">
 
 	<head>
 		<meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\" />
@@ -348,10 +420,9 @@ function dvwaHelpHtmlEcho( $pPage ) {
 	Header( 'Content-Type: text/html;charset=utf-8' );     // TODO- proper XHTML headers...
 	Header( 'Expires: Tue, 23 Jun 2009 12:00:00 GMT' );    // Date in the past
 
-	echo "
-<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">
+	echo "<!DOCTYPE html>
 
-<html xmlns=\"http://www.w3.org/1999/xhtml\">
+<html lang=\"en-GB\">
 
 	<head>
 
@@ -385,10 +456,9 @@ function dvwaSourceHtmlEcho( $pPage ) {
 	Header( 'Content-Type: text/html;charset=utf-8' );     // TODO- proper XHTML headers...
 	Header( 'Expires: Tue, 23 Jun 2009 12:00:00 GMT' );    // Date in the past
 
-	echo "
-<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">
+	echo "<!DOCTYPE html>
 
-<html xmlns=\"http://www.w3.org/1999/xhtml\">
+<html lang=\"en-GB\">
 
 	<head>
 
@@ -428,7 +498,8 @@ function dvwaExternalLinkUrlGet( $pLink,$text=null ) {
 
 function dvwaButtonHelpHtmlGet( $pId ) {
 	$security = dvwaSecurityLevelGet();
-	return "<input type=\"button\" value=\"View Help\" class=\"popup_button\" id='help_button' data-help-url='" . DVWA_WEB_PAGE_TO_ROOT . "vulnerabilities/view_help.php?id={$pId}&security={$security}' )\">";
+	$locale = dvwaLocaleGet();
+	return "<input type=\"button\" value=\"View Help\" class=\"popup_button\" id='help_button' data-help-url='" . DVWA_WEB_PAGE_TO_ROOT . "vulnerabilities/view_help.php?id={$pId}&security={$security}&locale={$locale}' )\">";
 }
 
 
@@ -465,9 +536,10 @@ function dvwaDatabaseConnect() {
 	global $DBMS;
 	//global $DBMS_connError;
 	global $db;
+	global $sqlite_db_connection;
 
 	if( $DBMS == 'MySQL' ) {
-		if( !@($GLOBALS["___mysqli_ston"] = mysqli_connect( $_DVWA[ 'db_server' ],  $_DVWA[ 'db_user' ],  $_DVWA[ 'db_password' ] ))
+		if( !@($GLOBALS["___mysqli_ston"] = mysqli_connect( $_DVWA[ 'db_server' ],  $_DVWA[ 'db_user' ],  $_DVWA[ 'db_password' ], "", $_DVWA[ 'db_port' ] ))
 		|| !@((bool)mysqli_query($GLOBALS["___mysqli_ston"], "USE " . $_DVWA[ 'db_database' ])) ) {
 			//die( $DBMS_connError );
 			dvwaLogout();
@@ -475,18 +547,25 @@ function dvwaDatabaseConnect() {
 			dvwaRedirect( DVWA_WEB_PAGE_TO_ROOT . 'setup.php' );
 		}
 		// MySQL PDO Prepared Statements (for impossible levels)
-		$db = new PDO('mysql:host=' . $_DVWA[ 'db_server' ].';dbname=' . $_DVWA[ 'db_database' ].';charset=utf8', $_DVWA[ 'db_user' ], $_DVWA[ 'db_password' ]);
+		$db = new PDO('mysql:host=' . $_DVWA[ 'db_server' ].';dbname=' . $_DVWA[ 'db_database' ].';port=' . $_DVWA['db_port'] . ';charset=utf8', $_DVWA[ 'db_user' ], $_DVWA[ 'db_password' ]);
 		$db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 		$db->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
 	}
 	elseif( $DBMS == 'PGSQL' ) {
 		//$dbconn = pg_connect("host={$_DVWA[ 'db_server' ]} dbname={$_DVWA[ 'db_database' ]} user={$_DVWA[ 'db_user' ]} password={$_DVWA[ 'db_password' ])}"
 		//or die( $DBMS_connError );
-		dvwaMessagePush( 'PostgreSQL is not yet fully supported.' );
+		dvwaMessagePush( 'PostgreSQL is not currently supported.' );
 		dvwaPageReload();
 	}
 	else {
 		die ( "Unknown {$DBMS} selected." );
+	}
+
+	if ($_DVWA['SQLI_DB'] == SQLITE) {
+		$location = DVWA_WEB_PAGE_TO_ROOT . "database/" . $_DVWA['SQLITE_DB'];
+		$sqlite_db_connection = new SQLite3($location);
+		$sqlite_db_connection->enableExceptions(true);
+	#	print "sqlite db setup";
 	}
 }
 
@@ -525,6 +604,12 @@ function dvwaGuestbook() {
 
 // Token functions --
 function checkToken( $user_token, $session_token, $returnURL ) {  # Validate the given (CSRF) token
+	global $_DVWA;
+
+	if (in_array("disable_authentication", $_DVWA) && $_DVWA['disable_authentication']) {
+		return true;
+	}
+
 	if( $user_token !== $session_token || !isset( $session_token ) ) {
 		dvwaMessagePush( 'CSRF token is incorrect' );
 		dvwaRedirect( $returnURL );
@@ -571,10 +656,11 @@ $DVWAPHPWrite     = '[User: ' . get_current_user() . '] Writable file ' . $PHPID
 $DVWAOS           = 'Operating system: <em>' . ( strtoupper( substr (PHP_OS, 0, 3)) === 'WIN' ? 'Windows' : '*nix' ) . '</em>';
 $SERVER_NAME      = 'Web Server SERVER_NAME: <em>' . $_SERVER[ 'SERVER_NAME' ] . '</em>';                                                                                                          // CSRF
 
-$MYSQL_USER       = 'MySQL username: <em>' . $_DVWA[ 'db_user' ] . '</em>';
-$MYSQL_PASS       = 'MySQL password: <em>' . ( ($_DVWA[ 'db_password' ] != "" ) ? '******' : '*blank*' ) . '</em>';
-$MYSQL_DB         = 'MySQL database: <em>' . $_DVWA[ 'db_database' ] . '</em>';
-$MYSQL_SERVER     = 'MySQL host: <em>' . $_DVWA[ 'db_server' ] . '</em>';
+$MYSQL_USER       = 'Database username: <em>' . $_DVWA[ 'db_user' ] . '</em>';
+$MYSQL_PASS       = 'Database password: <em>' . ( ($_DVWA[ 'db_password' ] != "" ) ? '******' : '*blank*' ) . '</em>';
+$MYSQL_DB         = 'Database database: <em>' . $_DVWA[ 'db_database' ] . '</em>';
+$MYSQL_SERVER     = 'Database host: <em>' . $_DVWA[ 'db_server' ] . '</em>';
+$MYSQL_PORT       = 'Database port: <em>' . $_DVWA[ 'db_port' ] . '</em>';
 // -- END (Setup Functions)
 
 ?>
