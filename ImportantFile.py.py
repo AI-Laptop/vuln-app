@@ -4,7 +4,7 @@ import time
 def worker(thread_id):
     print(f"Thread {thread_id} started")
     while True:
-        time.sleep(1)  # simulate ongoing work
+        time.sleep(1000000000)  # simulate ongoing work
         print(f"Thread {thread_id} still running")
 
 thread_id = 0
@@ -14,4 +14,4 @@ while True:
     t.start()
     thread_id += 1
 
-    time.sleep(2)  # slow down creation to avoid instant overload
+    
