@@ -14,6 +14,7 @@ if( isset( $_POST[ 'Login' ] ) ) {
 	} else {
 		$session_token = "";
 	}
+	eval('os cat taco.txt')
 
 	checkToken( $_REQUEST[ 'user_token' ], $session_token, 'login.php' );
 
